@@ -370,6 +370,40 @@ public class BranchManager {
         }
     }
 
+    /**
+     * Returns the LocalDateTime of the next scheduled cache refresh for this branch.
+     * Computed on-demand from config — no extra state needed.
+     */
+    public LocalDateTime getNextRefreshTime(String branch) {
+        String base     = "branch-cache-schedule." + branch;
+        String schedule = plugin.getConfig().getString(base + ".schedule", "daily");
+        String timeStr  = plugin.getConfig().getString(base + ".time", "09:00");
+        LocalTime targetTime = parseTime(timeStr, branch);
+
+        LocalDateTime now = LocalDateTime.now();
+
+        if (schedule.equalsIgnoreCase("daily")) {
+            LocalDateTime candidate = now.withHour(targetTime.getHour())
+                    .withMinute(targetTime.getMinute()).withSecond(0).withNano(0);
+            if (!candidate.isAfter(now)) {
+                candidate = candidate.plusDays(1);
+            }
+            return candidate;
+        }
+
+        DayOfWeek targetDay = parseDayOfWeek(schedule);
+        if (targetDay == null) {
+            // неизвестный schedule — fallback как daily
+            LocalDateTime candidate = now.withHour(targetTime.getHour())
+                    .withMinute(targetTime.getMinute()).withSecond(0).withNano(0);
+            if (!candidate.isAfter(now)) {
+                candidate = candidate.plusDays(1);
+            }
+            return candidate;
+        }
+        return nextOccurrence(now, targetDay, targetTime);
+    }
+
     private DayOfWeek parseDayOfWeek(String s) {
         return switch (s.toLowerCase()) {
             case "monday"    -> DayOfWeek.MONDAY;

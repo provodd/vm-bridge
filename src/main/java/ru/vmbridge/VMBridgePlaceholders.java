@@ -5,12 +5,15 @@ import net.sacredlabyrinth.phaed.simpleclans.Clan;
 import org.bukkit.OfflinePlayer;
 import org.jetbrains.annotations.NotNull;
 
+import java.time.LocalDateTime;
+
 /**
  * Registers PlaceholderAPI placeholders for VMBridge.
  *
  * Available placeholders:
  *   %vmbridge_<branch>_clan%         — plain clan tag (e.g. "warriors")
  *   %vmbridge_<branch>_clan_colored% — colored clan tag (e.g. "§6warriors")
+ *   %vmbridge_<branch>_next_refresh% — следующее обновление кэша (e.g. "Понедельник 21:00")
  *
  * Where <branch> is one of: green, blue, pink, orange.
  * Values are served from the in-memory owner cache — no I/O on every call.
@@ -53,6 +56,9 @@ public class VMBridgePlaceholders extends PlaceholderExpansion {
             if (params.equals(branch + "_clan_colored")) {
                 return getColored(branch);
             }
+            if (params.equals(branch + "_next_refresh")) {
+                return getNextRefresh(branch);
+            }
         }
         return null; // unknown placeholder — let PAPI handle it
     }
@@ -60,6 +66,18 @@ public class VMBridgePlaceholders extends PlaceholderExpansion {
     // ------------------------------------------------------------------ //
     //  Helpers                                                             //
     // ------------------------------------------------------------------ //
+
+    private static final String[] RU_DAYS = {
+        "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"
+    };
+
+    private String getNextRefresh(String branch) {
+        LocalDateTime next = plugin.getBranchManager().getNextRefreshTime(branch);
+        if (next == null) return "";
+        String day  = RU_DAYS[next.getDayOfWeek().getValue() - 1];
+        String time = String.format("%02d:%02d", next.getHour(), next.getMinute());
+        return day + " " + time;
+    }
 
     private String getPlain(String branch) {
         String tag = plugin.getBranchManager().getCachedOwner(branch);
