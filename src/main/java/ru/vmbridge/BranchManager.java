@@ -15,6 +15,8 @@ import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -33,6 +35,7 @@ import java.util.stream.Collectors;
 public class BranchManager {
 
     public static final Set<String> VALID_BRANCHES = Set.of("green", "blue", "pink", "orange");
+    private static final ZoneId MOSCOW = ZoneId.of("Europe/Moscow");
 
     private final VMBridge plugin;
     private final File dataFile;
@@ -47,6 +50,7 @@ public class BranchManager {
         this.plugin = plugin;
         dataFile = new File(plugin.getDataFolder(), "data.yml");
         load();
+        loadOwnerCache();
     }
 
     // ------------------------------------------------------------------ //
@@ -61,6 +65,15 @@ public class BranchManager {
         } else {
             plugin.getLogger().warning("[BranchManager] MySQL not available — loading from data.yml fallback.");
             loadFromYaml();
+        }
+    }
+
+    public void loadOwnerCache() {
+        ownerCache.clear();
+        if (plugin.getDb() != null && plugin.getDb().isConnected()) {
+            ownerCache.putAll(plugin.getDb().loadBranchOwners());
+        } else {
+            loadOwnerCacheFromYaml();
         }
     }
 
@@ -174,7 +187,7 @@ public class BranchManager {
         long periodTicks;
 
         if (schedule.equalsIgnoreCase("daily")) {
-            LocalTime now = LocalTime.now();
+            LocalTime now = ZonedDateTime.now(MOSCOW).toLocalTime();
             long secondsUntil = now.isBefore(targetTime)
                     ? Duration.between(now, targetTime).getSeconds()
                     : Duration.between(now, targetTime).getSeconds() + 86400L;
@@ -191,27 +204,24 @@ public class BranchManager {
                 scheduleForBranchDaily(branch, targetTime);
                 return;
             }
-            LocalDateTime now  = LocalDateTime.now();
+            LocalDateTime now  = ZonedDateTime.now(MOSCOW).toLocalDateTime();
             LocalDateTime next = nextOccurrence(now, targetDay, targetTime);
             delayTicks  = Duration.between(now, next).getSeconds() * 20L;
             periodTicks = 7L * 24L * 60L * 60L * 20L;
-            // конкретный день — при старте обновляем только если сегодня тот самый день
-            // и время уже наступило (иначе ждём таймера)
-            if (now.getDayOfWeek() == targetDay && !LocalTime.now().isBefore(targetTime)) {
-                plugin.getServer().getScheduler()
-                        .runTaskAsynchronously(plugin, () -> refreshBranch(branch));
-            }
         }
 
         plugin.getServer().getScheduler()
                 .runTaskTimerAsynchronously(plugin, () -> refreshBranch(branch), delayTicks, periodTicks);
 
+        LocalDateTime nextRun = ZonedDateTime.now(MOSCOW).toLocalDateTime().plusSeconds(delayTicks / 20);
         plugin.getLogger().info("[VMBridge Cache] Ветка '" + branch
-                + "': обновление " + schedule + " в " + timeStr + ".");
+                + "': обновление " + schedule + " в " + timeStr
+                + " (следующий запуск по МСК: " + nextRun.toLocalDate() + " " +
+                String.format("%02d:%02d", nextRun.getHour(), nextRun.getMinute()) + ").");
     }
 
     private void scheduleForBranchDaily(String branch, LocalTime targetTime) {
-        LocalTime now = LocalTime.now();
+        LocalTime now = ZonedDateTime.now(MOSCOW).toLocalTime();
         long secondsUntil = now.isBefore(targetTime)
                 ? Duration.between(now, targetTime).getSeconds()
                 : Duration.between(now, targetTime).getSeconds() + 86400L;
@@ -234,6 +244,7 @@ public class BranchManager {
 
     /** Refreshes a single branch. Must be called from an async thread. */
     private void refreshBranch(String branch) {
+        plugin.getLogger().info("[VMBridge Cache] Запуск обновления ветки '" + branch + "'...");
         String url = getBranchOwnerUrl(branch);
         if (url != null && !url.isBlank()) {
             fetchFromUrl(branch, url);
@@ -241,6 +252,9 @@ public class BranchManager {
             String placeholder = getBranchOwnerPlaceholder(branch);
             if (placeholder != null && !placeholder.isBlank() && plugin.isPapiEnabled()) {
                 fetchFromPapi(branch, placeholder);
+            } else {
+                plugin.getLogger().warning("[VMBridge Cache] Ветка '" + branch
+                        + "': не задан ни URL, ни плейсхолдер — пропускаем.");
             }
         }
     }
@@ -284,6 +298,7 @@ public class BranchManager {
                 }
 
                 ownerCache.put(branch, clanTag);
+                persistBranchOwner(branch, clanTag); // already on async thread
                 plugin.getLogger().info("[VMBridge Cache] Ветка '" + branch
                         + "' → клан '" + clanTag + "' (попытка " + attempt + ", URL).");
                 return;
@@ -343,9 +358,12 @@ public class BranchManager {
             try {
                 String clanTag = PlaceholderAPI.setPlaceholders(null, placeholder);
                 if (clanTag != null && !clanTag.isBlank() && !clanTag.equals(placeholder)) {
-                    ownerCache.put(branch, clanTag.trim());
-                    plugin.getLogger().info("[VMBridge Cache] " + branch
-                            + " → " + clanTag.trim() + " (PAPI)");
+                    String tag = clanTag.trim();
+                    ownerCache.put(branch, tag);
+                    // PAPI runs on main thread — save to DB async
+                    plugin.getServer().getScheduler().runTaskAsynchronously(
+                            plugin, () -> persistBranchOwner(branch, tag));
+                    plugin.getLogger().info("[VMBridge Cache] " + branch + " → " + tag + " (PAPI)");
                 } else {
                     plugin.getLogger().warning("[VMBridge Cache] Плейсхолдер '"
                             + placeholder + "' для ветки '" + branch + "' не разрешён.");
@@ -360,8 +378,13 @@ public class BranchManager {
     private LocalTime parseTime(String timeStr, String branch) {
         try {
             String[] parts = timeStr.split(":");
+            if (parts.length == 1) {
+                // YAML parses unquoted "17:00" as sexagesimal integer 1020 — convert back
+                int totalMinutes = Integer.parseInt(parts[0]);
+                return LocalTime.of(totalMinutes / 60, totalMinutes % 60);
+            }
             int hour   = Integer.parseInt(parts[0]);
-            int minute = parts.length > 1 ? Integer.parseInt(parts[1]) : 0;
+            int minute = Integer.parseInt(parts[1]);
             return LocalTime.of(hour, minute);
         } catch (Exception e) {
             plugin.getLogger().warning("[VMBridge Cache] Неверный формат time для ветки '"
@@ -380,7 +403,7 @@ public class BranchManager {
         String timeStr  = plugin.getConfig().getString(base + ".time", "09:00");
         LocalTime targetTime = parseTime(timeStr, branch);
 
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = ZonedDateTime.now(MOSCOW).toLocalDateTime();
 
         if (schedule.equalsIgnoreCase("daily")) {
             LocalDateTime candidate = now.withHour(targetTime.getHour())
@@ -459,7 +482,11 @@ public class BranchManager {
     }
 
     private void saveToYaml() {
-        FileConfiguration data = new YamlConfiguration();
+        // Load existing file to preserve sections we don't own (e.g. owner-cache written async)
+        FileConfiguration data = dataFile.exists()
+                ? YamlConfiguration.loadConfiguration(dataFile)
+                : new YamlConfiguration();
+
         assignments.forEach((uuid, a) -> {
             String base = "shops." + uuid;
             data.set(base + ".branch",      a.branch());
@@ -468,11 +495,37 @@ public class BranchManager {
             data.set(base + ".owner_name",  a.ownerName());
             data.set(base + ".assigned_by", a.assignedBy());
         });
+
+        // Persist owner cache as YAML backup
+        ownerCache.forEach((branch, tag) ->
+                data.set("owner-cache." + branch, tag));
+
         try {
             plugin.getDataFolder().mkdirs();
             data.save(dataFile);
         } catch (IOException e) {
             plugin.getLogger().log(Level.WARNING, "[BranchManager] Failed to save data.yml: " + e.getMessage(), e);
         }
+    }
+
+    private void loadOwnerCacheFromYaml() {
+        if (!dataFile.exists()) return;
+        FileConfiguration data = YamlConfiguration.loadConfiguration(dataFile);
+        if (!data.isConfigurationSection("owner-cache")) return;
+        data.getConfigurationSection("owner-cache").getKeys(false).forEach(branch -> {
+            String tag = data.getString("owner-cache." + branch);
+            if (tag != null && !tag.isBlank()) ownerCache.put(branch, tag);
+        });
+        if (!ownerCache.isEmpty())
+            plugin.getLogger().info("[VMBridge Cache] Загружено " + ownerCache.size()
+                    + " владельцев веток из data.yml.");
+    }
+
+    /** Saves branch owner to DB (call from async thread) and updates YAML backup on shutdown. */
+    private void persistBranchOwner(String branch, String clanTag) {
+        if (plugin.getDb() != null && plugin.getDb().isConnected()) {
+            plugin.getDb().saveBranchOwner(branch, clanTag, ZonedDateTime.now(MOSCOW).toLocalDateTime());
+        }
+        // YAML backup is written on shutdown via save() → saveToYaml()
     }
 }

@@ -106,6 +106,14 @@ public class DatabaseManager {
                     """);
 
             stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS vm_branch_owners (
+                        branch      VARCHAR(20)   NOT NULL PRIMARY KEY,
+                        clan_tag    VARCHAR(100)  NOT NULL,
+                        updated_at  DATETIME      NOT NULL COMMENT 'Moscow time of last cache refresh'
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                    """);
+
+            stmt.execute("""
                     CREATE TABLE IF NOT EXISTS vm_transactions (
                         id                BIGINT        AUTO_INCREMENT PRIMARY KEY,
                         timestamp         DATETIME      NOT NULL,
@@ -222,6 +230,54 @@ public class DatabaseManager {
                 }
             } catch (SQLException e) {
                 plugin.getLogger().log(Level.WARNING, "[DB] Failed to remove shop: " + e.getMessage(), e);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ //
+    //  vm_branch_owners — branch clan cache                              //
+    // ------------------------------------------------------------------ //
+
+    /** Loads all branch → clan_tag entries. Called once on startup (main thread). */
+    public Map<String, String> loadBranchOwners() {
+        Map<String, String> result = new HashMap<>();
+        synchronized (lock) {
+            try {
+                ensureConnected();
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT branch, clan_tag FROM vm_branch_owners");
+                     ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        result.put(rs.getString("branch"), rs.getString("clan_tag"));
+                    }
+                }
+                plugin.getLogger().info("[DB] Loaded " + result.size() + " branch owner(s) from MySQL.");
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.WARNING, "[DB] Failed to load branch owners: " + e.getMessage(), e);
+            }
+        }
+        return result;
+    }
+
+    /** Upserts a branch owner. Safe to call from an async thread. */
+    public void saveBranchOwner(String branch, String clanTag, LocalDateTime updatedAt) {
+        String sql = """
+                INSERT INTO vm_branch_owners (branch, clan_tag, updated_at)
+                VALUES (?, ?, ?)
+                ON DUPLICATE KEY UPDATE clan_tag = VALUES(clan_tag), updated_at = VALUES(updated_at)
+                """;
+        synchronized (lock) {
+            try {
+                ensureConnected();
+                try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                    ps.setString   (1, branch);
+                    ps.setString   (2, clanTag);
+                    ps.setTimestamp(3, Timestamp.valueOf(updatedAt));
+                    ps.executeUpdate();
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[DB] Failed to save branch owner '" + branch + "': " + e.getMessage(), e);
             }
         }
     }

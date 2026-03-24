@@ -50,6 +50,8 @@ branch-cache-schedule:
   orange:
     schedule: "daily"
     time: "09:00"
+# IMPORTANT: always quote the time value (e.g. "17:00"), otherwise YAML parses
+# it as a sexagesimal integer and the time will fall back to 09:00.
 
 # Tax events:
 #   buy  — taxed when a player BUYS from the shop (shop owner receives money)
