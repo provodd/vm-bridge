@@ -1,0 +1,20 @@
+name: VMBridge
+version: 1.0.0
+main: ru.vmbridge.VMBridge
+api-version: '1.20'
+authors: [ Admin ]
+description: Tax bridge between VillagerMarket shops and SimpleClans bank
+
+depend: [ VillagerMarket ]
+softdepend: [ SimpleClans, PlaceholderAPI ]
+
+commands:
+  vmbridge:
+    description: VMBridge management commands
+    usage: /vmbridge <setbranch|removebranch|info|setrate|list|reload>
+    permission: vmbridge.admin
+
+permissions:
+  vmbridge.admin:
+    description: Full access to VMBridge commands
+    default: op

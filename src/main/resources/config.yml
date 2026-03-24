@@ -1,0 +1,70 @@
+# ============================================================
+#  VMBridge - VillagerMarket <-> SimpleClans Tax Plugin
+# ============================================================
+
+# Tax rate for each branch (0.05 = 5%, 0.10 = 10%, etc.)
+tax-rate:
+  green: 0.05
+  blue: 0.05
+  pink: 0.05
+  orange: 0.05
+
+# Способ определения клана-владельца ветки.
+# Приоритет: если задан branch-owner-url — используется он, иначе branch-owner-placeholder.
+#
+# branch-owner-url: URL, возвращающий владельца раз в сутки (см. cache-refresh-time).
+#   Поддерживаемые форматы ответа:
+#     plain text:  warriors
+#     JSON:        {"clan": "warriors"}
+branch-owner-url:
+  green: ''
+  blue: ''
+  pink: ''
+  orange: ''
+
+# PlaceholderAPI placeholders that return the CLAN TAG of the branch owner.
+# The placeholder must return exactly the SimpleClans clan tag (e.g. "warriors").
+# Edit these values to match whatever plugin provides the ownership info.
+branch-owner-placeholder:
+  green: ''
+  blue: '%simplesiege_1_owner%'
+  pink: ''
+  orange: ''
+
+# Расписание обновления кэша кланов — задаётся отдельно для каждой ветки.
+# schedule: "daily"       — каждый день
+#           "monday"      — каждый понедельник  (также: tuesday, wednesday,
+#           "friday"        thursday, friday, saturday, sunday)
+# time:     "HH:mm"       — время по серверному времени
+# При старте плагина кэш обновляется автоматически для всех веток.
+branch-cache-schedule:
+  green:
+    schedule: "daily"
+    time: "09:00"
+  blue:
+    schedule: "daily"
+    time: "09:00"
+  pink:
+    schedule: "daily"
+    time: "09:00"
+  orange:
+    schedule: "daily"
+    time: "09:00"
+
+# Tax events:
+#   buy  — taxed when a player BUYS from the shop (shop owner receives money)
+#   sell — taxed when a player SELLS to the shop  (shop owner spends money)
+tax-on-buy: true
+tax-on-sell: false
+
+# Print detailed transaction info to the server console.
+# Set to true only for debugging — leave false in production.
+debug: false
+
+# MySQL connection settings for transaction logging
+mysql:
+  host: localhost
+  port: 3306
+  database: minecraft
+  username: root
+  password: ''
